@@ -1,13 +1,10 @@
 /* 
-**
-* Модуль служит для запуска парсеров сайто решений суда
- */
+* Данный скрипт отвечает за создание обучающей выборки 
+*/
 
-var agent = require("./modules/crawler");
-
-
-// TODO пока что сделанна заглушка т.к. я не могу разобратся с их API?
-agent.start({ host:"localhost", port:8888 }, function(list) {
-    console.log(list);
+var Crawler = require("./modules/crawler").Crawler;
+var crawler = new Crawler({
+    proxy_host: "172.20.99.56",
+    proxy_port: 46522
 });
 
