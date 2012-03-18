@@ -1,4 +1,5 @@
 var db_connection = require("./../utils/db_driver").db_connection;
+var Stem = require("./stem").Stem;
 
 
 /**
@@ -6,9 +7,10 @@ var db_connection = require("./../utils/db_driver").db_connection;
 * @params.id - идентификатор документа во внешней системе
 * @params.name - имя, заголовок документа
 * @params.date - дата 
+* @params.category - категория которая присвоена документу (если не равна нулю то possible_category игнорится)
 * @params.possible_category - возможная категория, которую необходимо проверить
 * @params.text - текст документа, который будет проанализирован и превращен в термы
-* @params.comlete() - функция обратного вызова при успешном сохраенени документа
+* @params.end() - функция обратного вызова при успешном сохраенени документа
 * @params.error(error) - функция обратного вызова при ошибки сохранения докумнета в системе
 */
 var Document = function(params) {
@@ -24,24 +26,45 @@ var Document = function(params) {
     // сохраняем описание документа
     this.collection = db_connection.collection('document');
     var self = this;
-    
-    // проверяем нет ли такой категории в базе
+
+    // проверяем нет ли такого документа в базе
     this.collection.find({id: this.id}).toArray(function(err, objects){
         // если для данная категория еще не существует!
         if(objects.length == 0) {
-            self.collection.insert({
-                                        name: self.name, 
-                                        id: self.id,
-                                        text: self.text
-                                    }, 
-                                    {safe:true}, function(err, objects) {
-                if (err && !params.error) {
-                    console.warn(err.message);
-                } else if (params.error) {
-                    params.error(err.message);
-                } 
+           // выполняем стемминг слов документа для данной категории!
+           Stem.steming({
+                    text: self.text,
+                    category: self.category,
+                    end: function(_stems) {
+                            self.collection.insert({
+                                            name: self.name, 
+                                            category: self.category,
+                                            id: self.id,
+                                            stems: _stems
+                                        }, 
+                                        {safe:true}, function(err, objects) {
+                                            
+                                            if (err && !params.error) {
+                                                console.warn(err.message);
+                                            } else if (params.error) {
+                                                params.error(err.message);
+                                            } else if (params.end != undefined && typeof params.end == "function") {
+                                               params.end(objects[0]);
+                                            }
+                                        }); // end inserting
+                    } // end stemming
             });
-        } 
+        } else {
+
+            if (err && !params.error) {
+                console.warn(err.message);
+            } else if (params.error) {
+                params.error(err.message);
+            } else if (params.end != undefined && typeof params.end == "function") {
+                params.end(self);
+            }
+ 
+        }
     });
 };
 
