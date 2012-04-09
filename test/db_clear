@@ -1,0 +1,4 @@
+db.document.remove();
+db.catCost.remove();
+db.docCost.remove();
+db.stem.remove();

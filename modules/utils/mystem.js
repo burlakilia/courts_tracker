@@ -7,8 +7,9 @@ var exec = require('child_process').exec;
 var db_connection = require("./db_driver").db_connection;
 
 var Mystem = function (params){
-    this.tempFilePath = "/tmp/mystem-temp" // файл с которым работаем
-    
+    this.tempInputFilePath = "/tmp/mystem-input" // файл с которым работаем
+    this.tempOutputFilePath = "/tmp/mystem-output" // файл с которым работаем
+   
     // получаем список игнорируемых стоп слов
     var collection = db_connection.collection('overlookedStem');
     this.overlookedStem = [];
@@ -44,6 +45,7 @@ Mystem.prototype._isOverlooked = function(stem) {
     return false;
 }
 
+
 /**
  * Метод обработки строки
  * @param text - текст который должен быть обработан
@@ -51,33 +53,49 @@ Mystem.prototype._isOverlooked = function(stem) {
  */
 Mystem.prototype.stemString = function(text, callback) {
     var self = this;
-    
-    // Записываем текст во временный файл
-    exec(" echo '" + text + "' | iconv -f utf8 -t cp1251 |  mystem -wl | iconv -f cp1251 -t utf8", function (error, stdout, stderr) {
-        
-        var stArray = stdout.replace(/{/g, "").split("}");
-        var retVal = new Array();
-        
-        for(var i=0; i<stArray.length; i++) {
-        
-            var stem = stArray[i];
-            var pos = stem.indexOf("|");
-             
-            if ( pos > 0 ) {
-                stem = stem.substr(0, pos);
-            }
-            if (!self._isOverlooked(stem)) {
-                retVal.push(stem);
-            }
-        }
-        
-        callback(retVal);
+    var fs = require('fs');
 
-        if (error) {
-            console.log("Mystem write file error", error);
-        }
+    var startStemming = function() {
+        exec("~/bin/mystem -wil -e utf8 " + self.tempInputFilePath, function (error, stdout, stderr) {
+
+            var stArray = stdout.replace(/{/g, "").split("}");
+            var retVal = new Array();
+
+            for(var i=0; i<stArray.length; i++) {
+
+                var stem = stArray[i];
+                var pos = stem.indexOf("=");
+                // проверям что только существительное 
+                if ( pos > 0 &&  stem.substr(pos+1, 1) == "S") {
+                    stem = stem.substr(0, pos);
+                    if (!self._isOverlooked(stem)) {
+                        retVal.push(stem);
+                    }
+                }
+
+            }
+
+            callback(retVal);
+
+            if (error) {
+                console.log("Mystem write file error", error);
+            }
+        });
+        
+
+    }
+    console.log(this.tempInputFilePath);
+    fs.unlink(this.tempInputFilePath, function (err) { 
+        // Записываем текст во временный файл
+        fs.open(self.tempInputFilePath, 'a', 777, function( e, id ) {
+            fs.write( id, text, null, 'utf8', function(){
+                fs.close(id, function(){
+                    console.log("file close");
+                    startStemming();
+                });
+            });
+        });
     });
-
 }
 
 

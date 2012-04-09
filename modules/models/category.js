@@ -65,6 +65,16 @@ var Category = function(params) {
     });
 }
 
+Category.getActive = function (params){
+    var collection = db_connection.collection('category');
+    var catCost =  db_connection.collection('catCost');
+
+    collection.find({active: true}).toArray(function(err, objs) {
+        params.end(objs);
+    })
+      
+}
+    
 Category.removeAll = function() {
     this.ctollection = db_connection.collection('category');
     this.ctollection.remove();

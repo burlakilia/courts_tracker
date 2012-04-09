@@ -2,20 +2,63 @@ var http = require("http");
 var url = require("url");
 var fs = require('fs');
 
-var Document = require("./modules/models/document").Document;
-var Category = require("./modules/models/category").Category;
+var router = require('./modules/router');
+var actions = require('./actions');
+var express = require("express");
 
-console.log(new Category());
+var app = express.createServer();
 
-http.createServer(function(request, response){
-    fs.readFile('./public/index.html', function(error, content) {
-        if (error) {
-            response.writeHead(500);
-            response.end();
-        }
-        else {
-            response.writeHead(200, {'Content-Type': 'text/html'});
-            response.end(content, 'utf-8');
-        }
-    }); 
-}).listen(8080); 
+app.use("/public", express.static(__dirname + '/public'));
+
+app.get('/', function(req, res){
+    actions.index(res);
+});
+
+app.get('/get_main_info', function(req, res){
+    actions.get_main_info(res);
+})
+
+app.get('/get_categories', function(req, res){
+    actions.get_categories(res);
+})
+var qs = require('querystring');
+
+app.post('/proccessDocument', function(request, response){
+    if (request.method == 'POST') {
+        var body = '';
+        
+        request.on('data', function (data) {
+            body += data;
+            if (body.length > 1e6) {
+                // FLOOD ATTACK OR FAULTY CLIENT, NUKE REQUEST
+                request.connection.destroy();
+            }
+        });
+        request.on('end', function () {
+
+            var params = JSON.parse(body);
+           
+            console.log(params.text);
+            
+            var Document = require("./modules/models/document").Document;
+
+            Document.proccess ({
+                text: params.text,
+                category: params.category,
+                end: function(result, stems) {
+                    
+                    var resp = new Object();
+                    resp["result"] = result,
+                    resp["stems"] = stems;
+                    
+                    response.writeHead(200, {'Content-Type': 'text/json'});
+                    response.end(JSON.stringify(resp), 'utf-8');
+
+                }
+            });
+
+        });
+    }
+})
+
+app.listen(3000);

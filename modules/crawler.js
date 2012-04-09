@@ -1,18 +1,8 @@
 
 var ServiceDriver = require("./utils/ras_driver").ServiceDriver;
-var libxmljs = require("libxmljs");
 var Category = require("./models/category").Category;
 var Document = require("./models/document").Document;
 
-var RequestQuery = function() {
-    
-    this.lastRequestNumber = 0; // номер последнего запроса  
-    this.queries = [];
-};
-
-RequestQuery.prototype.addQuery = function(query) {
-    
-};
 
 /**
 * Коструктор класс паука, который отвечает за синхронизация и обработку баз 
@@ -22,115 +12,176 @@ RequestQuery.prototype.addQuery = function(query) {
 */
 var Crawler = function(params) {
   
-   this.intervalId = null; // идентификатор основного цикла
-   this.categories = new Array(); // список категорий
-   this.queries = new RequestQuery();
-   
-   this.serviceDriver = new ServiceDriver(this.options);
-
-   this.options = {
+    this.intervalId = null; // идентификатор основного цикла
+    this.categories = new Array(); // список категорий
+    this.proccessCount = 0; // количество одновремнно выполняемых запросов
+    this.totalProcessCount = 1;
+    this.requests = [];
+  
+    this.options = {
         host: "http://ras.arbitr.ru/",
         headers: {
-                Host: "ras.arbitr.ru"
+            Host: "ras.arbitr.ru"
         }
-   }
+    }
    
-   if (params.proxy_host && params.proxy_port) {
+    if (params.proxy_host && params.proxy_port) {
         this.options = {
             host: params.proxy_host,
             port: params.proxy_port,
             path: "http://ras.arbitr.ru/",
             headers: {
                 Host: "ras.arbitr.ru"
-        }};      
-   }
-
-   Crawler.refreshCategories.call(this, {
-       end: function() {
-            // Context Crawler object
-            console.log("start main cicle");
-            var self = this;
-            
-            // Запускаем основной цикл нашего паучка
-            this.intervalId = setInterval(function(params) {
-                Crawler.mainCicle.call(self);
-                clearInterval(self.intervalId)
-            }, 1000 ); 
-       }
-   });
- 
- 
-}
-
-/**
-* Метод получения списка категорий и сохранения их в базе
-* @params.end() - метод который будет вызван после завершения обработки
-*/
-Crawler.refreshCategories = function(params) {
-    var self = this;
-    GLOBAL.SERVICE.getCategories({
-        end: function(data) {
-            var xmlDoc = libxmljs.parseHtmlString(data);
-            var categories = xmlDoc.get('//div[@id="caseCategory"]/span/label/select');
-            
-            categories.childNodes().forEach(function(item){
-                if (item.attr("value")) {
-                    // пробуем создать категорию
-                    self.categories.push(new Category({
-                        id:  item.attr("value").value(),
-                        name: item.text()
-                    }));
-                }
-            }, this)
-            
-            if (params.end && typeof params.end == "function") {
-                params.end.call(self);
             }
-        }
+        };      
+    }
+   
+    this.serviceDriver = new ServiceDriver(this.options);
+
+    var self = this;
+    this.proccess ({
+        proc: function(processEnd) {
+            self.serviceDriver.getCategories({
+                end: function(data) {
+                    processEnd(data);
+                }
+            })
+        },
+        end: function(data) {
+            var prCount = 0; // всего обновленных категорий
+            for(var i=0; i<data.length; i++ ) {
+                var cat = new Category({
+                    id: data[i].id,
+                    name: data[i].name,
+                    end: function() {
+                        prCount ++;
+                        // если обработали все категории
+                        if (prCount == data.length) {
+                            console.log("Список категорий успешно обновленн!", data.length);
+                            self.mainCicle({
+                                categories: data
+                            });
+                        }
+                    }
+                })
+            }
+        } 
     });
+
 }
 
 /**
- * Метод обновления данных о документах
- * @params.category - категория, для которой обнолвяется сипсок документов
+ *  Метод выполнения 
+ *  @params.proc - процесс (функция), которая должна быть выполненна
+ *  @params.end - после выполенния функции
  */
-Crawler.refreshDocuments = function(params) {
+Crawler.prototype.proccess = function(params) {
+    var retVal = []; // Массив данных, которые должен вернуть процесс
     var self = this;
-    GLOBAL.SERVICE.getDocumentsList({
-        category: params.category,
-        end: function(list) {
-            var items = list.Result.Items;
-            for(var i=0; i< items.length; i++){
-                var _item = items[i];
-                GLOBAL.SERVICE.getDocumentText({
-                    id: _item.Id,
-                    end: function(data) {
-                        console.log("Документ " + _item.InstanceNumber + "  запущен в обработку")       
-                    },
-                    error: function(error) {
-                        console.error(error);
+    
+    var pr = function() {
+        if(self.proccessCount < self.totalProcessCount) {
+            self.proccessCount ++;
+            params.proc.call(self, function(data){
+                self.proccessCount--;
+                params.end(data);
+            }, params.data);
+            
+            // если есть таймер
+            if (intervalId) {
+                clearInterval(intervalId);
+            }
+            
+            return true;
+        } else {
+            return false;
+        }
+    }
+    
+    // если все места заняты, то ждать пока не освободится
+    if (!pr()) {
+        var intervalId = setInterval(pr, 2000)
+    }
+}
+
+/**
+ * Метод запуска основного цикла 
+ * @params.categories - список категорий
+ * @params.
+ */
+Crawler.prototype.mainCicle = function(params) {
+    console.log("Получаем список докуметнтов, для всех категории", params.categories.length);
+    
+    var self = this;
+    var documents = [];
+    var processCount = 0;
+    
+    for(var i=0; i<params.categories.length; i++) {
+
+       this.proccess ({
+           proc: function(processEnd) {
+               self.serviceDriver.getDocumentsList({
+                   category: params.categories[i].id,
+                   end: function(data) {
+                       console.log("Документ для категории " + params.categories[i].id + " найденны!");
+                       processEnd(data);
+                   },
+                   empty: function(){
+                      processEnd([]);
+                   }
+               })
+           },
+           end: function(data) {
+                processCount ++;
+                documents.push({
+                    category: params.categories[i].id,
+                    doc: data
+                });
+                
+                // документы для всех категорий обработанны
+                if (processCount == params.categories.length) {
+                    for(var j=0; j<documents.length; j++) {
+                        if(documents[j].doc.length > 0){
+                            self.proccessDocumentsList({
+                                documents:  documents[j].doc
+                            })
+                        }
+                    }
+                }
+                
+           }
+       });
+    }
+}
+
+/**
+ * Метод обработки списка докуметов 
+ */
+Crawler.prototype.proccessDocumentsList = function(params) {
+    var docData = null;
+    for(var p=0; p<params.documents.length; p++) {
+        docData = params.documents[p];
+        this.proccess ({
+            data: docData,
+            proc: function(proccessEnd, dc) {
+                var dc = new Document({
+                    id: dc.id,
+                    name : dc.title, 
+                    category : dc.category,
+                    date: "20.02.2012",
+                    service: this.serviceDriver,
+
+                    end: function(doc) {
+                       proccessEnd(doc);
                     }
                 });
+            }, 
+            
+            end: function(data) {
+                console.log("Документ " + data.name + " успешно обработан!");
             }
-        },
-        
-        empty: function() {}
-    });
-}
-/**
- * Основной цикл паука
- * Context Crawler object
- */
-Crawler.mainCicle = function() {
-    var db_connection = require("./utils/db_driver").db_connection;
-    this.collection = db_connection.collection('category');
-    this.collection.find().each(function(err, objects) {
-        if (objects != undefined && objects.id != undefined) {
-            Crawler.refreshDocuments({
-                category: objects.id
-            });
-        }
-    });
+        })
+    }
 
 }
 

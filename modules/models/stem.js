@@ -13,70 +13,140 @@ var db_connection = require("./../utils/db_driver").db_connection;
 var Stem = function(params) {   
     this.stem = params.stem;
     this.id = params.stem;
-    this.costs = [];
-    this.collection = db_connection.collection('stem');
- 
-    var self = this;
-
-    // проверяем нет ли такой категории в базе
-    this.collection.find({stem: self.stem}).toArray(function(err, objects){
-        var object;
-         if(objects.length == 0) {
-            
-            self.costs.push({
-                category: params.category,
-                count: 1
-            });
-            
-            self.collection.insert({
-                stem: self.stem,
-                costs: self.costs,
-                count: 1
-            }, 
-            { safe:true }, function(err, objects) {
-
-                if (err && !params.error) {
-                    console.warn(err.message);
-                } else if (params.error) {
-                    params.error(err.message);
-                } else if (params.end != undefined && typeof params.end == "function") {
-                    params.end(objects[0]._id);
-                }
-            }); // end inserting
-        } else {
-            
-            var newCosts = objects[0].costs;
-            var newCount = ++objects[0].count;
-            
-            for(var i=0; i< newCosts.length; i++ ){
-                 if(newCosts[i].category == params.category) {
-                    newCosts[i].count++;
-                    break;
-                }
-            } 
-            
+    this.document = params.document;
+    this.category = params.category;
     
-            if (newCosts.length == i) {
-                newCosts.push({
-                    category: params.category,
-                    count: 1
-                })
-            }
-             
-            // Обновляем количество вхожденй стемов для данной категории
-            self.collection.update({stem: params.stem}, {$set: {costs: newCosts, count: newCount}}, {safe:true},
+    this.docCost = 1; // стоимость стем для данного документа
+    this.catCost = 1; // стоимость стема для данной категории
+
+    if (params.end != undefined && typeof params.end == "function") {
+        params.end.call(this);
+    }
+}
+
+Stem.prototype.updateStem = function (callback) {
+     
+    var collection = db_connection.collection('stem');
+    var self = this;
+    
+    collection.find({"stem": this.stem}).toArray(function(err, obj){
+       console.log(self.stem, obj.length);
+       if(obj.length == 0) {
+           collection.insert({"stem": self.stem, "count":self.docCost}, {safe:false},
                 function(err) {
                     if (err) {
                         console.warn(err.message);
                     }
-                    else if(params.end != undefined && typeof params.end == "function") {
-                       params.end(objects[0]._id);
-                    }
+                    else if (callback != undefined && typeof callback == "function") {
+                        self.updateCosts({
+                            end: function() { callback() } 
+                        });
+                    } 
             });
-
-        }
+       } else {
+            collection.update({"stem": self.stem}, {$inc: {count: + self.docCost}}, {safe:false},
+                function(err) {
+                    if (err) {
+                        console.warn(err.message);
+                    }
+                    else if (callback != undefined && typeof callback == "function") {
+                        self.updateCosts({
+                            end: function() { callback() } 
+                        });
+                    } 
+            });
+              
+       }
     });
+}
+
+Stem.prototype.updateCosts = function(params){
+    var self = this;
     
+    self.updateDocCosts({
+        document: params.document,
+        end: function() {
+
+            self.updateCatCosts({
+                category: params.category,
+                end: function() {
+                    if(params.end != undefined && typeof params.end == "function") {
+                        params.end(params.stem);
+                    }
+                }
+            })
+        }
+    })
+}
+
+/**
+ * Метод обновления количества, вхождений стемма в документ
+ * @params.document - идентификатор документа
+ * @params.end - функция обратного вызова при завершений
+ */
+Stem.prototype.updateDocCosts = function(params) {
+    var collection = db_connection.collection('docCost');
+    var self = this;
+    
+    collection.find({doc: self.document}).toArray(function(err, objects){
+         if (objects.length == 0){
+            collection.insert({
+                stem: self.stem,
+                doc: self.document,
+                count: self.docCost
+            }, 
+            {safe:false}, function(err, objects) {
+                if (params.end != undefined && typeof params.end == "function") {
+                    params.end();
+                }
+            })
+        } else {
+            collection.update({stem: self.stem, doc:self.document}, {$inc: {count: +self.docCost }}, {safe:false},
+                function(err) {
+                    if (err) {
+                        console.warn(err.message);
+                    }
+                    else if (params.end != undefined && typeof params.end == "function") {
+                            params.end();
+                    } 
+            });
+        }
+    })
+}
+
+/**
+ * Метод обновления количества, вхождений стемма в категорию
+ * @params.document - идентификатор документа
+ * @params.end - функция обратного вызова при завершений
+ */
+Stem.prototype.updateCatCosts = function(params) {
+     var collection = db_connection.collection('catCost');
+     var self = this;
+     
+     collection.find({stem: this.stem, cat: self.category}).toArray(function(err, objects){
+        if (objects.length == 0){
+            collection.insert({
+                stem: self.stem,
+                cat: self.category,
+                count: self.docCost
+            }, 
+            {safe:true}, function(err, objects) {
+                if (params.end != undefined && typeof params.end == "function") {
+                    params.end();
+                }
+            })
+        } else {
+            collection.update({stem: self.stem, cat:self.category}, {$inc: {count: self.docCost}}, {safe:true},
+                function(err) {
+                    if (err) {
+                        console.warn(err.message);
+                    }
+                    else if (params.end != undefined && typeof params.end == "function") {
+                            params.end();
+                    } 
+            });
+        }
+    })
 }
 
 /**
@@ -88,26 +158,55 @@ var Stem = function(params) {
  */
 Stem.steming = function (params) {
     var stem = new Mystem();
+    
     var proccessStemsCount = 0; // сколько всего стемов обработанно
-
+    
     if (params.text != undefined) {
         stem.stemString(params.text, function(stems) {
             var retVal = new Array();
-         
+            
             for (var i=0; i<stems.length; i++) {
                 var st = new Stem({
                     stem: stems[i], 
                     category: params.category,
+                    document: params.document,
                     
-                    end: function(stem){
-                             
-                       if (++proccessStemsCount ==  stems.length){
-                            if(params.end != undefined && typeof params.end == "function") {
-                                    params.end(retVal);
+                    end: function(){
+                        
+                        var findStem = function (_st) {
+                            for(var j=0; j<retVal.length; j++) {
+                                if(retVal[j].stem == _st) {
+                                    return j;
+                                }
                             }
+                            
+                            return retVal.length;
+                        };
+                        
+                        var num = findStem(this.stem);
+
+                        if (num == retVal.length){
+                            retVal.push(this);
+                        } else {  
+                            retVal[num].docCost ++;
                         }
                         
-                        retVal.push(stem);
+                        if (proccessStemsCount == stems.length - 1 && params.end != undefined && typeof params.end == "function"){
+                            
+                            var updateStemsCount = 0;
+                            
+                            // обновляем стемы в базеd
+                            for(var k=0; k< retVal.length; k++ ){ 
+                                retVal[k].updateStem(function() {
+                                    if (++updateStemsCount == retVal.length) {
+                                        params.end(retVal);
+                                    }
+                                });
+                            }  
+                        } 
+                            
+                        proccessStemsCount++;
+                            
                     } // end end
                 });// end retVal.push
             }
@@ -116,5 +215,18 @@ Stem.steming = function (params) {
     }
 }
 
+
+/**
+ * Метод получения списка документов по заданным параметрам
+ */
+Stem.getStemsCount = function (params) {
+    this.collection = db_connection.collection('stem');
+    
+    this.collection.find().toArray(function(err, objects) {
+        if (params.end != undefined && typeof params.end == "function") {
+            params.end(objects.length);
+        }
+    })
+}
 
 exports.Stem = Stem;
